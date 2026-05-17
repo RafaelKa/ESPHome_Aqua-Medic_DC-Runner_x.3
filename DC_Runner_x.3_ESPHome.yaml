@@ -253,10 +253,8 @@ interval:
   - interval: 2s
     then:
       - lambda: |-
-          // 0x00 used for heartbeat "online" state in original firmware
-          uint8_t wifi_status = network::is_connected() ? 0x00 : 0x01;
-          uint8_t hb_cs = (uint8_t)(0x05 + wifi_status);
-          uint8_t hb[] = {0xF5, 0x0A, 0x04, 0x01, wifi_status, hb_cs};
+          // Byte 4 must stay 0x00 — non-zero gets latched as persistent AP-flag in MCU EEPROM
+          uint8_t hb[] = {0xF5, 0x0A, 0x04, 0x01, 0x00, 0x05};
           id(mcu_uart).write_array(hb, 6);
 
   - interval: 20ms
