@@ -134,4 +134,5 @@ The controller uses a bitmask at Byte 8. Multiple errors can be reported simulta
 *   **Error Handling:** The system relies on the MCU to trigger hardware protections. While the ESP8266 can monitor error bits, the "Hard-Off" (e.g., during dry run) is managed by the MCU's internal logic, which can take up to 2 minutes to trigger Er03.
 *   **Checksum Calculation:** Simple 8-bit sum of all bytes starting from Length (Byte 2) up to the byte before the Checksum (Byte 13).
 *   **Connectivity:** The Wi-Fi symbol on the controller display is passively controlled by the ESP8266 via Byte 9 in the heartbeat packet.
+*   **MCU State Persistence:** The controller MCU retains operational parameters (Power state, Speed, Feed Timer) in non-volatile memory. Values written by the ESP via standard `0x0B` command packets persist across MCU power cycles and re-appear in the first status frame after boot. The MCU is the authoritative source of truth — a custom firmware therefore does not need its own `initial_value`/`restore_value` for these settings.
 
