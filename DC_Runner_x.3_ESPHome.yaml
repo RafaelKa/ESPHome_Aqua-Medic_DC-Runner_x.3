@@ -211,18 +211,28 @@ interval:
   - interval: 1s
     then:
       - lambda: |-
-          // Auto-stop feed countdown when timer reaches zero
+          // Monitor feed countdown timer for drift analysis
           if (id(pump_feed_sw).state && id(feed_countdown_start_time) != 0) {
-            uint32_t elapsed = (millis() - id(feed_countdown_start_time)) / 1000;
-            uint32_t duration = (uint32_t)id(feed_timer).state * 60;
-            if (elapsed >= duration) {
-              id(feed_countdown_start_time) = 0;
-              // Publish local state and send command to MCU to turn feed off
-              id(pump_feed_sw).publish_state(false);
-              id(ignore_mcu_updates_until) = millis() + 1000;
-              id(send_command).execute();
-              ESP_LOGD("custom", "Feed countdown completed, turning off feed and notifying MCU");
+            uint32_t elapsed_ms = millis() - id(feed_countdown_start_time);
+            uint32_t elapsed_s = elapsed_ms / 1000;
+            uint32_t duration_s = (uint32_t)id(feed_timer).state * 60;
+            uint32_t remaining_s = (duration_s > elapsed_s) ? (duration_s - elapsed_s) : 0;
+            
+            // Log every 10 seconds for drift analysis
+            if (elapsed_s % 10 == 0) {
+              ESP_LOGD("custom", "Countdown: elapsed=%.1fs, remaining=%ds, duration=%ds", 
+                       elapsed_ms / 1000.0f, remaining_s, duration_s);
             }
+            
+            // DISABLED: Auto-stop countdown - measuring drift before re-enabling
+            // if (elapsed >= duration) {
+            //   id(feed_countdown_start_time) = 0;
+            //   id(pump_feed_sw).publish_state(false);
+            //   id(ignore_mcu_updates_until) = millis() + 1000;
+            //   id(send_command).execute();
+            //   ESP_LOGD("custom", "Feed countdown completed at %.1fs (duration was %ds)", 
+            //            elapsed_ms / 1000.0f, duration_s);
+            // }
           }
 
   - interval: 2s
