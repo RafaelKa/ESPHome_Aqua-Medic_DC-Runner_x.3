@@ -47,6 +47,9 @@ globals:
   - id: mcu_synced
     type: bool
     initial_value: 'false'
+  - id: feed_countdown_start_time
+    type: uint32_t
+    initial_value: '0'
 
 # Numeric sensor for raw error code
 sensor:
@@ -55,6 +58,24 @@ sensor:
     id: pump_error_code
     icon: "mdi:numeric"
     accuracy_decimals: 0
+
+  - platform: template
+    name: "Feed Countdown Remaining"
+    id: feed_countdown_remaining_seconds
+    device_class: duration
+    icon: "mdi:timer"
+    unit_of_measurement: "s"
+    accuracy_decimals: 0
+    lambda: |-
+      // Remaining = feed_timer (min) * 60 - elapsed_seconds_since_start
+      if (id(pump_feed_sw).state && id(feed_countdown_start_time) != 0) {
+        uint32_t elapsed = (millis() - id(feed_countdown_start_time)) / 1000;
+        uint32_t duration = (uint32_t)id(feed_timer).state * 60;
+        uint32_t remaining = (duration > elapsed) ? (duration - elapsed) : 0;
+        return (float)remaining;
+      }
+      return 0.0;
+    update_interval: 1s
 
 # Text sensor for human-readable status
 text_sensor:
@@ -99,6 +120,12 @@ number:
     on_value:
       then:
         - lambda: |-
+            // If feed is currently on, reset the countdown start time so remaining is recalculated from full duration
+            if (id(pump_feed_sw).state) {
+              id(feed_countdown_start_time) = millis();
+              ESP_LOGD("custom", "Feed timer changed while feed ON; countdown reset to %d seconds", (uint32_t)id(feed_timer).state * 60);
+            }
+        - lambda: |-
             if (id(mcu_synced) && millis() > id(ignore_mcu_updates_until)) {
               id(ignore_mcu_updates_until) = millis() + 1000;
               id(send_command).execute();
@@ -131,12 +158,20 @@ switch:
     on_turn_on:
       then:
         - lambda: |-
+            // Start the feed countdown timer (UI or HA triggered)
+            id(feed_countdown_start_time) = millis();
+            ESP_LOGD("custom", "Feed countdown started: %d seconds", (uint32_t)id(feed_timer).state * 60);
+        - lambda: |-
             if (id(mcu_synced) && millis() > id(ignore_mcu_updates_until)) {
               id(ignore_mcu_updates_until) = millis() + 1000;
               id(send_command).execute();
             }
     on_turn_off:
       then:
+        - lambda: |-
+            // Stop the feed countdown timer (UI or HA triggered)
+            id(feed_countdown_start_time) = 0;
+            ESP_LOGD("custom", "Feed countdown stopped by user/HA");
         - lambda: |-
             if (id(mcu_synced) && millis() > id(ignore_mcu_updates_until)) {
               id(ignore_mcu_updates_until) = millis() + 1000;
@@ -172,6 +207,23 @@ interval:
             - output.turn_on: wifi_icon_pin
           else:
             - output.turn_off: wifi_icon_pin
+
+  - interval: 1s
+    then:
+      - lambda: |-
+          // Auto-stop feed countdown when timer reaches zero
+          if (id(pump_feed_sw).state && id(feed_countdown_start_time) != 0) {
+            uint32_t elapsed = (millis() - id(feed_countdown_start_time)) / 1000;
+            uint32_t duration = (uint32_t)id(feed_timer).state * 60;
+            if (elapsed >= duration) {
+              id(feed_countdown_start_time) = 0;
+              // Publish local state and send command to MCU to turn feed off
+              id(pump_feed_sw).publish_state(false);
+              id(ignore_mcu_updates_until) = millis() + 1000;
+              id(send_command).execute();
+              ESP_LOGD("custom", "Feed countdown completed, turning off feed and notifying MCU");
+            }
+          }
 
   - interval: 2s
     then:
@@ -221,7 +273,21 @@ interval:
               if (millis() > id(ignore_mcu_updates_until)) {
                 bool changed = false;
                 if (id(pump_power_sw).state != (data[4] == 0x01)) { id(pump_power_sw).publish_state(data[4] == 0x01); changed = true; }
-                if (id(pump_feed_sw).state != (data[5] == 0x01)) { id(pump_feed_sw).publish_state(data[5] == 0x01); changed = true; }
+                if (id(pump_feed_sw).state != (data[5] == 0x01)) {
+                  bool new_feed_state = (data[5] == 0x01);
+                  id(pump_feed_sw).publish_state(new_feed_state);
+                  // If MCU or hardware toggled feed, start/stop countdown locally without sending commands
+                  if (new_feed_state) {
+                    // Start countdown according to current feed_timer
+                    id(feed_countdown_start_time) = millis();
+                    ESP_LOGD("custom", "MCU reported feed ON; starting local countdown for %d seconds", (uint32_t)id(feed_timer).state * 60);
+                  } else {
+                    // Stop countdown without notifying MCU (since MCU initiated)
+                    id(feed_countdown_start_time) = 0;
+                    ESP_LOGD("custom", "MCU reported feed OFF; stopping local countdown without sending command");
+                  }
+                  changed = true;
+                }
                 if ((uint8_t)id(pump_speed).state != data[6]) { id(pump_speed).publish_state((float)data[6]); changed = true; }
                 if ((uint8_t)id(feed_timer).state != data[7]) { id(feed_timer).publish_state((float)data[7]); changed = true; }
 

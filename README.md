@@ -18,6 +18,7 @@ I like the pump much more now ;)
   **Real-time Status Monitoring** including raw error codes
   **Note!** It seems the controller MCU does not throw the error and does not stop, if the pump runs dry.
   Most probably this is the issue of MCU, not of ESP8266 or ESPHome firmware.
+* **Feed Countdown Timer** - Displays remaining feed time in seconds (fallback when MCU doesn't provide native countdown)
 
 ### plans
 
@@ -127,9 +128,39 @@ The controller uses a bitmask at Byte 8. Multiple errors can be reported simulta
 
 ---
 
+### 4. Feed Countdown Timer Feature
+
+The ESP8266 implements a software-based feed countdown timer that serves as a fallback when the MCU does not natively provide remaining feed time information.
+
+#### How it works:
+
+1. **Activation:** When the "Feed switch" is turned on, the ESP8266 captures the current "Feed timer" value (in minutes) and starts an internal countdown.
+
+2. **Real-time Display:** A new sensor displays the remaining time in seconds:
+   - **Feed Countdown Remaining**: Remaining time in seconds (updates every 1 second)
+
+3. **Auto-completion:** The countdown automatically:
+   - Stops the feed when the timer expires
+   - Updates every 1 second for real-time display
+   - Logs events for debugging via ESP_LOG
+
+4. **Manual Override:** Manually turning off the feed switch stops the countdown immediately.
+
+#### Sensor in Home Assistant:
+
+```yaml
+sensor.feed_countdown_remaining_seconds   # Unit: s (seconds)
+```
+
+#### Example Use Cases:
+
+- Display remaining feed time on a Home Assistant dashboard
+- Create automations based on countdown completion
+- Monitor feeding sessions for statistical analysis
+
 ---
 
-### 4. Logical Observations
+### 5. Logical Observations
 *   **Wattage Display:** Although the controller display shows real-time wattage changes (e.g., dropping to 1W during dry run), indicating a physical shunt is present for internal monitoring, this data is **not** transmitted via the standard UART status packet (`0x0C`). The MCU seems to keep high-resolution power data internal or uses a different, yet unidentified, packet type.
 *   **Error Handling:** The system relies on the MCU to trigger hardware protections. While the ESP8266 can monitor error bits, the "Hard-Off" (e.g., during dry run) is managed by the MCU's internal logic, which can take up to 2 minutes to trigger Er03.
 *   **Checksum Calculation:** Simple 8-bit sum of all bytes starting from Length (Byte 2) up to the byte before the Checksum (Byte 13).
