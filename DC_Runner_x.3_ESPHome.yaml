@@ -50,6 +50,9 @@ globals:
   - id: feed_countdown_start_time
     type: uint32_t
     initial_value: '0'
+  - id: feed_mcu_report_time
+    type: uint32_t
+    initial_value: '0'
 
 # Numeric sensor for raw error code
 sensor:
@@ -220,8 +223,8 @@ interval:
             
             // Log every 10 seconds for drift analysis
             if (elapsed_s % 10 == 0) {
-              ESP_LOGD("custom", "Countdown: elapsed=%.1fs, remaining=%ds, duration=%ds", 
-                       elapsed_ms / 1000.0f, remaining_s, duration_s);
+              ESP_LOGD("custom", "Countdown: elapsed=%.1fs, remaining=%lus, duration=%lus", 
+                       elapsed_ms / 1000.0f, (unsigned long)remaining_s, (unsigned long)duration_s);
             }
             
             // DISABLED: Auto-stop countdown - measuring drift before re-enabling
@@ -290,11 +293,25 @@ interval:
                   if (new_feed_state) {
                     // Start countdown according to current feed_timer
                     id(feed_countdown_start_time) = millis();
-                    ESP_LOGD("custom", "MCU reported feed ON; starting local countdown for %d seconds", (uint32_t)id(feed_timer).state * 60);
+                    id(feed_mcu_report_time) = millis();
+                    unsigned long duration_s = (unsigned long)id(feed_timer).state * 60UL;
+                    ESP_LOGD("custom", "MCU reported feed ON; starting local countdown for %lu seconds (timer=%lu)", (unsigned long)duration_s, (unsigned long)id(feed_timer).state);
                   } else {
                     // Stop countdown without notifying MCU (since MCU initiated)
-                    id(feed_countdown_start_time) = 0;
-                    ESP_LOGD("custom", "MCU reported feed OFF; stopping local countdown without sending command");
+                    // record MCU stop timestamp and compute drift if we have a local start
+                    unsigned long now_ms = millis();
+                    id(feed_mcu_report_time) = now_ms;
+                    if (id(feed_countdown_start_time) != 0) {
+                      uint32_t elapsed_ms = now_ms - id(feed_countdown_start_time);
+                      unsigned long duration_s = (unsigned long)id(feed_timer).state * 60UL;
+                      long duration_ms = (long)duration_s * 1000L;
+                      long drift_ms = (long)elapsed_ms - duration_ms;
+                      id(feed_countdown_start_time) = 0;
+                      ESP_LOGD("custom", "MCU reported feed OFF; stopped at elapsed=%.1fs, expected=%lu s, drift=%ld ms", elapsed_ms / 1000.0f, (unsigned long)duration_s, (long)drift_ms);
+                    } else {
+                      id(feed_countdown_start_time) = 0;
+                      ESP_LOGD("custom", "MCU reported feed OFF; no local start time present (timer=%lu)", (unsigned long)id(feed_timer).state);
+                    }
                   }
                   changed = true;
                 }
