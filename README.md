@@ -18,6 +18,7 @@ I like the pump much more now ;)
   **Real-time Status Monitoring** including raw error codes
   **Note!** It seems the controller MCU does not throw the error and does not stop, if the pump runs dry.
   Most probably this is the issue of MCU, not of ESP8266 or ESPHome firmware.
+* **Feed Mode & Software Countdown** - Displays remaining feed time in seconds (fallback when MCU doesn't provide native countdown)
 
 ### plans
 
@@ -127,12 +128,25 @@ The controller uses a bitmask at Byte 8. Multiple errors can be reported simulta
 
 ---
 
+### Feed Mode & Software Countdown
+
+Since the original pump MCU does not expose the remaining time of the feeding cycle via its serial protocol, a software-based fallback timer has been implemented:
+
+* **Feed Countdown Remaining (`feed_countdown_remaining_seconds`):** A duration sensor that counts down the remaining feed time in seconds (`s`), updating in real-time every second.
+* **Feed Countdown Display (`feed_countdown_display`):** A text sensor formatting the remaining time into a user-friendly `MM:SS` string for easy dashboard integration (e.g., Home Assistant).
+* **Feed Allowed (`feed_allowed`):** A binary sensor indicating whether entering the feed mode is currently permitted.
+
+#### Safety & Interlock Logic:
+1. **Automatic Cancellation:** If the main pump power switch (`pump_power_sw`) is turned off during an active feeding cycle, 
+   the feed mode is immediately cancelled and the countdown resets.
+2. **Activation Protection:** Turning on the feed switch while the main power is off is blocked. 
+   The switch will automatically revert to the "Off" position in the UI after a 300ms delay to prevent ghost states.
+
 ---
 
-### 4. Logical Observations
+### 5. Logical Observations
 *   **Wattage Display:** Although the controller display shows real-time wattage changes (e.g., dropping to 1W during dry run), indicating a physical shunt is present for internal monitoring, this data is **not** transmitted via the standard UART status packet (`0x0C`). The MCU seems to keep high-resolution power data internal or uses a different, yet unidentified, packet type.
 *   **Error Handling:** The system relies on the MCU to trigger hardware protections. While the ESP8266 can monitor error bits, the "Hard-Off" (e.g., during dry run) is managed by the MCU's internal logic, which can take up to 2 minutes to trigger Er03.
 *   **Checksum Calculation:** Simple 8-bit sum of all bytes starting from Length (Byte 2) up to the byte before the Checksum (Byte 13).
 *   **Connectivity:** The Wi-Fi symbol on the controller display is passively controlled by the ESP8266 via Byte 9 in the heartbeat packet.
 *   **MCU State Persistence:** The controller MCU retains operational parameters (Power state, Speed, Feed Timer) in non-volatile memory. Values written by the ESP via standard `0x0B` command packets persist across MCU power cycles and re-appear in the first status frame after boot. The MCU is the authoritative source of truth — a custom firmware therefore does not need its own `initial_value`/`restore_value` for these settings.
-

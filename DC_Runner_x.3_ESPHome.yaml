@@ -47,6 +47,12 @@ globals:
   - id: mcu_synced
     type: bool
     initial_value: 'false'
+  - id: feed_revert_at
+    type: uint32_t
+    initial_value: '0'
+  - id: feed_countdown_start_time
+    type: uint32_t
+    initial_value: '0'
 
 # Numeric sensor for raw error code
 sensor:
@@ -56,12 +62,55 @@ sensor:
     icon: "mdi:numeric"
     accuracy_decimals: 0
 
+  - platform: template
+    name: "Feed Countdown Remaining"
+    id: feed_countdown_remaining_seconds
+    device_class: duration
+    icon: "mdi:timer"
+    unit_of_measurement: "s"
+    accuracy_decimals: 0
+    lambda: |-
+      if (id(pump_feed_sw).state && id(feed_countdown_start_time) != 0) {
+        uint32_t elapsed = (millis() - id(feed_countdown_start_time)) / 1000;
+        uint32_t duration = (uint32_t)id(feed_timer).state * 60;
+        uint32_t remaining = (duration > elapsed) ? (duration - elapsed) : 0;
+        return (float)remaining;
+      }
+      return 0.0;
+    update_interval: 1s
+
+binary_sensor:
+  - platform: template
+    name: "Feed Allowed"
+    id: feed_allowed
+    lambda: |-
+      // Feed is allowed when main power switch is ON
+      return id(pump_power_sw).state;
+
 # Text sensor for human-readable status
 text_sensor:
   - platform: template
     name: "Pump Status"
     id: pump_error
     icon: "mdi:alert-circle-outline"
+
+  - platform: template
+    name: "Feed Countdown Display"
+    id: feed_countdown_display
+    icon: "mdi:timer-outline"
+    lambda: |-
+      if (id(pump_feed_sw).state && id(feed_countdown_start_time) != 0) {
+        uint32_t elapsed = (millis() - id(feed_countdown_start_time)) / 1000;
+        uint32_t duration = (uint32_t)id(feed_timer).state * 60;
+        uint32_t remaining = (duration > elapsed) ? (duration - elapsed) : 0;
+        uint32_t minutes = remaining / 60;
+        uint32_t seconds = remaining % 60;
+        char buf[6];
+        snprintf(buf, sizeof(buf), "%02lu:%02lu", (unsigned long)minutes, (unsigned long)seconds);
+        return std::string(buf);
+      }
+      return "00:00";
+    update_interval: 1s
 
 # Hardware pin for the icon
 output:
@@ -119,6 +168,13 @@ switch:
     on_turn_off:
       then:
         - lambda: |-
+            // Auto-disable feed when power is turned OFF
+            if (id(pump_feed_sw).state) {
+              ESP_LOGD("custom", "Power switch turned OFF; auto-disabling feed switch");
+              id(pump_feed_sw).publish_state(false);
+              id(feed_revert_at) = 0;
+            }
+        - lambda: |-
             if (id(mcu_synced) && millis() > id(ignore_mcu_updates_until)) {
               id(ignore_mcu_updates_until) = millis() + 1000;
               id(send_command).execute();
@@ -131,6 +187,15 @@ switch:
     on_turn_on:
       then:
         - lambda: |-
+            // If power is OFF, don't send command and schedule revert
+            if (!id(pump_power_sw).state) {
+              ESP_LOGD("custom", "Feed ON blocked: power is OFF, scheduling revert in 300ms");
+              id(feed_revert_at) = millis() + 300;
+              return;
+            }
+            // Start countdown timer
+            id(feed_countdown_start_time) = millis();
+            // Power is ON, send command
             if (id(mcu_synced) && millis() > id(ignore_mcu_updates_until)) {
               id(ignore_mcu_updates_until) = millis() + 1000;
               id(send_command).execute();
@@ -138,6 +203,8 @@ switch:
     on_turn_off:
       then:
         - lambda: |-
+            // Stop countdown timer
+            id(feed_countdown_start_time) = 0;
             if (id(mcu_synced) && millis() > id(ignore_mcu_updates_until)) {
               id(ignore_mcu_updates_until) = millis() + 1000;
               id(send_command).execute();
@@ -163,6 +230,16 @@ script:
           id(mcu_uart).write_array(p, 13);
 
 interval:
+  - interval: 50ms
+    then:
+      - lambda: |-
+          // Check if feed switch needs to be reverted (blocked due to power OFF)
+          if (id(feed_revert_at) > 0 && millis() >= id(feed_revert_at)) {
+            ESP_LOGD("custom", "Feed revert triggered: power is OFF, reverting feed switch to OFF");
+            id(feed_revert_at) = 0;
+            id(pump_feed_sw).publish_state(false);
+          }
+
   - interval: 1s
     then:
       - if:
